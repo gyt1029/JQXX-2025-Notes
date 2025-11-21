@@ -1,0 +1,16 @@
+https://github.com/gyt1029/JQXX-2025-Notes/commit/cb27808d3ae41dc9e09ee7e0bf4401b8d5797496
+
+def validate_data(df, target_column='fss2_group'):
+    """验证数据质量"""
+    if target_column not in df.columns:
+        raise ValueError(f"目标列 {target_column} 不存在于数据中")
+    
+    missing_target = df[target_column].isnull().sum()
+    missing_percentage = missing_target / len(df) * 100
+    
+    print(f"目标变量 '{target_column}' 缺失值: {missing_target} ({missing_percentage:.2f}%)")
+    
+    if missing_percentage > 50:
+        print("警告: 目标变量缺失值超过50%，数据质量可能有问题")
+    
+    return True
