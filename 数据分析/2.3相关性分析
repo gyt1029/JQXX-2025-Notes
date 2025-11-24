@@ -1,0 +1,30 @@
+# 最简版本的相关性分析Pearson相关
+library(readxl)
+
+# 读取数据
+data <- read_excel("C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 只选择几个明确的数值型变量
+simple_vars <- data.frame(
+  WBC_Count = as.numeric(data$WBC_Count),
+  Neu_Count = as.numeric(data$Neu_Count),
+  Lym_Count = as.numeric(data$Lym_Count),
+  Mon_Count = as.numeric(data$Mon_Count),
+  NLR = as.numeric(data$NLR),
+  MLR = as.numeric(data$MLR),
+  ESR = as.numeric(data$ESR),
+  FSS2 = as.numeric(data$FSS2_Total),
+  FSS1 = as.numeric(data$FSS1_Total)
+)
+
+# 移除完全缺失的行
+simple_vars <- na.omit(simple_vars)
+
+# 计算相关性
+cor_result <- cor(simple_vars, method = "spearman")
+print("简化版相关性矩阵:")
+print(cor_result)
+
+# 可视化
+library(corrplot)
+corrplot(cor_result, method = "number")
