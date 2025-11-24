@@ -1,0 +1,141 @@
+library(tidyverse)
+library(broom)
+library(readxl)
+library(officer)
+library(flextable)
+library(logistf)
+
+# 读取数据
+data <- read_excel("C:\\Users\\g2997\\Desktop\\Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 对连续变量进行尺度调整
+data <- data %>%
+  mutate(
+    HDL_10 = HDL * 10,  # HDL每增加0.1单位
+    INR_100 = INR * 100,  # INR每增加0.01单位
+    # 其他变量保持原尺度或按需调整
+    ESR = ESR,
+    Fasting_Blood_Glucose = Fasting_Blood_Glucose,
+    ALT = ALT,
+    AST = AST,
+    Direct_Bilirubin = Direct_Bilirubin,
+    APTT = APTT,
+    PT = PT,
+    Hcy = Hcy,
+    TSH = TSH,
+    T3 = T3,
+    HAMA_Total = HAMA_Total,
+    HAMD_Total = HAMD_Total,
+    T3T4 = T3T4
+  )
+
+# 使用Firth's bias-reduced logistic回归
+model_firth <- logistf(fss2_group ~ ESR + 
+                         Fasting_Blood_Glucose + ALT + AST + Direct_Bilirubin + 
+                         HDL_10 + APTT + PT + INR_100 + Hcy + TSH + T3 + 
+                         HAMA_Total + HAMD_Total + T3T4, 
+                       data = data)
+
+# 获取模型摘要
+model_summary <- summary(model_firth)
+
+# 提取系数、OR值、置信区间和p值
+firth_results <- data.frame(
+  term = names(coef(model_firth)),
+  estimate = exp(coef(model_firth)),  # 转换为OR值
+  conf.low = exp(model_firth$ci.lower),
+  conf.high = exp(model_firth$ci.upper),
+  p.value = model_firth$prob
+)
+
+# 清理变量名（移除截距项）
+firth_results <- firth_results %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    across(c(estimate, conf.low, conf.high), ~round(., 3)),
+    p.value = round(p.value, 4),
+    OR_CI = paste0(estimate, " (", conf.low, "-", conf.high, ")"),
+    Significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      TRUE ~ "NS"
+    )
+  ) %>%
+  select(term, OR_CI, p.value, Significance) %>%
+  rename(
+    Variable = term,
+    `OR (95% CI)` = OR_CI,
+    `P Value` = p.value,
+    `Significance` = Significance
+  )
+
+# 创建Word文档
+doc <- read_docx()
+
+# 添加标题
+doc <- doc %>% 
+  body_add_par("多因素Logistic回归分析结果 - Firth回归 (OR值)", style = "heading 1") %>%
+  body_add_par(" ") %>%
+  body_add_par(paste("分析方法: Firth's bias-reduced logistic regression"), style = "Normal") %>%
+  body_add_par(paste("分析时间:", Sys.Date()), style = "Normal") %>%
+  body_add_par(" ") %>%
+  body_add_par("注: 使用Firth回归解决完全分离问题，获得更稳定的OR估计", style = "Normal") %>%
+  body_add_par(" ")
+
+# 创建表格
+ft <- flextable(firth_results) %>%
+  theme_box() %>%
+  bg(bg = "#f5f5f5", part = "header") %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "all") %>%
+  width(width = 2) %>%
+  fontsize(size = 11, part = "all") %>%
+  color(~ `P Value` < 0.05, ~Variable, color = "red")
+
+# 将表格添加到文档
+doc <- body_add_flextable(doc, ft, align = "center")
+
+# 添加说明
+doc <- doc %>%
+  body_add_par(" ") %>%
+  body_add_par("说明:", style = "heading 2") %>%
+  body_add_par("• OR > 1: 该变量增加会提高疲劳风险") %>%
+  body_add_par("• OR < 1: 该变量增加会降低疲劳风险") %>%
+  body_add_par("• OR = 1: 该变量与疲劳无关") %>%
+  body_add_par("• 显著性: *** p<0.001, ** p<0.01, * p<0.05, NS 不显著") %>%
+  body_add_par("• 方法说明: Firth回归专门用于处理小样本或完全分离情况，提供更稳定的估计")
+
+# 保存Word文档
+print(doc, target = "OR_Results_Firth_Regression.docx")
+
+cat("Firth回归分析完成！Word文档已保存为: OR_Results_Firth_Regression.docx\n")
+
+# 额外输出：比较原始模型和Firth回归的结果差异
+cat("\n=== 模型比较信息 ===\n")
+cat("原始模型存在完全分离问题，导致OR值异常\n")
+cat("Firth回归提供了更合理的OR估计\n")
+cat("样本量:", nrow(data), "\n")
+cat("疲劳组病例数:", sum(data$fss2_group == 1, na.rm = TRUE), "\n")
+cat("非疲劳组病例数:", sum(data$fss2_group == 0, na.rm = TRUE), "\n")
+
+
+
+
+# 绘制森林图
+library(forestplot)
+
+# 准备森林图数据
+forest_data <- or_results %>%
+  filter(term != "(Intercept)") %>%
+  arrange(OR) %>%
+  mutate(variable = term)
+
+# 绘制森林图
+ggplot(forest_data, aes(x = OR, y = reorder(variable, OR))) +
+  geom_point(size = 3) +
+  geom_errorbarh(aes(xmin = CI_low, xmax = CI_high), height = 0.2) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(x = "Odds Ratio (OR)", y = "Variables") +
+  theme_minimal() +
+  scale_x_log10()
