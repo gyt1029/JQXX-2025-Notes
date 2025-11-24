@@ -1,1 +1,83 @@
+def main():
+    """主程序模板"""
+    print("=" * 60)
+    print("机器学习分析流程")
+    print("=" * 60)
+    
+    # 1. 数据加载与预处理
+    df = load_and_validate_data()
+    df = clean_column_names(df)
+    validate_data(df, 'target_column')
+    df = reduce_memory_usage(df)
+    
+    # 2. 数据划分
+    X_train, X_test, y_train, y_test = split_data(df, 'target_column')
+    
+    # 3. 特征工程
+    X_train_processed, X_test_processed, use_regularization = engineer_features(X_train, X_test, y_train)
+    
+    # 4. 特征选择
+    selected_features, feature_importance_df = select_features_random_forest(X_train_processed, y_train)
+    X_train_selected = X_train_processed[selected_features]
+    X_test_selected = X_test_processed[selected_features]
+    
+    # 5. 构建预处理管道
+    numerical_features = X_train_selected.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_features = X_train_selected.select_dtypes(include=['object']).columns.tolist()
+    preprocessor = build_preprocessor(numerical_features, categorical_features)
+    
+    # 6. 处理类别不平衡
+    class_weight_dict = compute_class_weights(y_train)
+    
+    # 7. 定义模型
+    models = {
+        '逻辑回归 (LR)': create_logistic_regression_model(preprocessor, use_regularization, class_weight_dict),
+        '随机森林 (RF)': create_random_forest_model(preprocessor, class_weight_dict),
+        '支持向量机 (SVM)': create_svm_model(preprocessor, class_weight_dict),
+        '深度神经网络 (DNN)': create_dnn_model(preprocessor),
+    }
+    
+    if use_xgboost:
+        models['XGBoost'] = create_xgboost_model(preprocessor, class_weight_dict[1]/class_weight_dict[0])
+    
+    # 8. 训练和评估模型
+    results = []
+    for name, model in models.items():
+        print(f"\n--- 训练 {name} ---")
+        try:
+            model.fit(X_train_selected, y_train)
+            y_pred = model.predict(X_test_selected)
+            y_pred_proba = model.predict_proba(X_test_selected)[:, 1]
+            
+            metrics = evaluate_model(model, X_test_selected, y_test, y_pred, y_pred_proba, name)
+            cv_mean, cv_std = cross_validate_model(model, X_train_selected, y_train)
+            
+            results.append({
+                'Model': name,
+                **metrics,
+                'CV_AUC_Mean': cv_mean,
+                'CV_AUC_Std': cv_std,
+                'model_obj': model,
+                'y_pred': y_pred,
+                'y_pred_proba': y_pred_proba
+            })
+            
+        except Exception as e:
+            print(f"训练 {name} 时出错: {e}")
+    
+    # 9. 可视化结果
+    comparison_df = pd.DataFrame([{k: v for k, v in result.items() if k not in ['model_obj', 'y_pred', 'y_pred_proba']} 
+                                  for result in results])
+    comparison_df = comparison_df.sort_values('AUC', ascending=False)
+    
+    plot_feature_importance(feature_importance_df)
+    plot_model_comparison(comparison_df)
+    plot_roc_curves(results, y_test)
+    plot_prediction_probability_distribution(results, y_test)
+    
+    # 10. 保存结果
+    comparison_df.to_csv('model_comparison_results.csv', index=False, encoding='utf-8-sig')
+    print("\n分析完成!")
 
+if __name__ == "__main__":
+    main()
