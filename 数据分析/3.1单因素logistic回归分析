@@ -1,0 +1,238 @@
+# 读取数据
+data <- read_excel("C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 分组 - 创建二分类因变量
+data$fss_group <- ifelse(data$FSS2_Total >= 36, 1, 0)  # 1=FSS组, 0=Non_FSS组
+
+# 变量列表
+vars <- c(
+  "Fasting_Blood_Glucose",  "ESR","ALT", "AST", "Direct_Bilirubin", "HDL",  "APTT", "PT",  "INR", 
+  "Hcy", "TSH", "T3", "HAMD_Total", "HAMA_Total", "TOAST_Classification"
+)
+
+# 创建存储结果的列表
+logistic_results <- list()
+
+# 遍历每个变量进行单因素Logistic回归
+for(var in vars) {
+  if(var %in% names(data)) {
+    cat("\n=== 变量:", var, "===\n")
+    
+    # 检查缺失值
+    complete_cases <- complete.cases(data[[var]], data$fss_group)
+    n_complete <- sum(complete_cases)
+    
+    if(n_complete < 10) {
+      cat("警告: 完整案例数不足 (n =", n_complete, ")，跳过该变量\n")
+      next
+    }
+    
+    # 创建临时数据框，确保没有缺失值
+    temp_data <- data[complete_cases, c(var, "fss_group")]
+    
+    # 进行单因素二元Logistic回归
+    formula <- as.formula(paste("fss_group ~", var))
+    logistic_model <- glm(formula, 
+                          data = temp_data, 
+                          family = binomial(link = "logit"))
+    
+    # 获取模型摘要
+    model_summary <- summary(logistic_model)
+    
+    # 提取系数和统计量
+    coef_df <- as.data.frame(model_summary$coefficients)
+    
+    # 计算OR值和95%置信区间
+    OR <- exp(coef(logistic_model)[2])
+    CI <- exp(confint(logistic_model)[2, ])
+    
+    # 存储结果
+    logistic_results[[var]] <- list(
+      variable = var,
+      model = logistic_model,
+      coefficient = coef_df[2, 1],
+      std_error = coef_df[2, 2],
+      z_value = coef_df[2, 3],
+      p_value = coef_df[2, 4],
+      OR = OR,
+      OR_CI_lower = CI[1],
+      OR_CI_upper = CI[2],
+      n_complete = n_complete
+    )
+    
+    # 打印结果
+    cat("OR值:", round(OR, 4), "\n")
+    cat("95% CI:", round(CI[1], 4), "-", round(CI[2], 4), "\n")
+    cat("P值:", round(coef_df[2, 4], 4), "\n")
+  }
+}
+
+# 生成Logistic回归结果表格并输出到Word
+generate_logistic_word_table <- function(logistic_results, output_file = "Logistic回归结果.docx") {
+  
+  # 整理Logistic回归结果
+  results_df <- map_df(names(logistic_results), function(var) {
+    result <- logistic_results[[var]]
+    
+    data.frame(
+      变量 = var,
+      `回归系数` = sprintf("%.3f", result$coefficient),
+      `标准误` = sprintf("%.3f", result$std_error),
+      `Z值` = sprintf("%.3f", result$z_value),
+      `OR值` = sprintf("%.3f", result$OR),
+      `95% CI` = sprintf("%.3f-%.3f", result$OR_CI_lower, result$OR_CI_upper),
+      `P值` = sprintf("%.4f", result$p_value),
+      `显著性` = ifelse(result$p_value < 0.001, "***", 
+                     ifelse(result$p_value < 0.01, "**", 
+                            ifelse(result$p_value < 0.05, "*", "不显著"))),
+      `样本量` = result$n_complete,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  })
+  
+  # 创建flextable
+  ft <- flextable(results_df) %>%
+    # 设置表格主题
+    theme_booktabs() %>%
+    # 设置列宽
+    width(width = 1.0) %>%
+    # 添加表头
+    add_header_lines(values = "单因素二元Logistic回归分析结果") %>%
+    # 设置表头格式
+    bold(part = "header") %>%
+    # 设置字体大小
+    fontsize(size = 9, part = "all") %>%
+    # 自动调整列宽
+    autofit() %>%
+    # 添加边框
+    border_outer(border = fp_border(color = "black", width = 1)) %>%
+    border_inner_h(border = fp_border(color = "gray", width = 0.5)) %>%
+    border_inner_v(border = fp_border(color = "gray", width = 0.5)) %>%
+    # 居中对齐
+    align(align = "center", part = "all") %>%
+    # 左对齐第一列
+    align(j = 1, align = "left") %>%
+    # 设置显著性列的颜色
+    color(~ `显著性` == "***", ~ `显著性`, color = "red") %>%
+    color(~ `显著性` == "**", ~ `显著性`, color = "darkorange") %>%
+    color(~ `显著性` == "*", ~ `显著性`, color = "blue") %>%
+    # 添加脚注说明显著性水平
+    add_footer_lines(values = c(
+      "显著性说明: * p<0.05, ** p<0.01, *** p<0.001",
+      "因变量: FSS组(FSS2≥36=1) vs Non-FSS组(FSS2<36=0)"
+    )) %>%
+    # 设置脚注格式
+    italic(part = "footer") %>%
+    fontsize(size = 8, part = "footer")
+  
+  # 创建Word文档
+  doc <- read_docx() %>%
+    # 添加标题
+    body_add_par("单因素二元Logistic回归分析结果", style = "heading 1") %>%
+    body_add_par(paste("生成时间:", Sys.Date()), style = "Normal") %>%
+    body_add_par("") %>%
+    # 添加表格
+    body_add_flextable(ft) %>%
+    # 添加说明文字
+    body_add_par("") %>%
+    body_add_par("表格说明:", style = "heading 2") %>%
+    body_add_par("1. 本表格展示了各变量与PSF发生风险的单因素Logistic回归分析结果") %>%
+    body_add_par("2. 因变量: FSS组(FSS2≥36=1) vs Non-FSS组(FSS2<36=0)") %>%
+    body_add_par("3. OR值>1表示该变量增加PSF发生风险，OR值<1表示降低风险") %>%
+    body_add_par("4. 95%CI不包含1表示有统计学意义")
+  
+  # 保存文档
+  print(doc, target = output_file)
+  
+  cat("Logistic回归表格已保存至:", output_file, "\n")
+  
+  return(list(flextable = ft, data = results_df))
+}
+
+# 执行函数生成Word表格
+logistic_table <- generate_logistic_word_table(logistic_results, "单因素Logistic回归分析结果.docx")
+
+# 在RStudio中预览表格
+logistic_table$flextable
+
+# 查看数据
+print(logistic_table$data)
+
+# 可选：生成重要结果的简化表格（只显示有显著性的变量）
+significant_results <- logistic_table$data[logistic_table$data$`显著性` != "不显著", ]
+if(nrow(significant_results) > 0) {
+  cat("\n=== 有显著性的变量 ===\n")
+  print(significant_results)
+} else {
+  cat("\n=== 没有发现显著相关的变量 ===\n")
+}
+# 专门针对您的数据生成森林图
+generate_final_forest_plot <- function() {
+  library(ggplot2)
+  library(dplyr)
+  
+  # 根据您提供的表格数据创建数据框
+  forest_data <- data.frame(
+    Variable = c("ESR", "HDL", "TSH", "T3", "HAMD_Total", "HAMA_Total", 
+                 "TOAST_1", "TOAST_2", "TOAST_3", "TOAST_4"),
+    N = c(163, 163, 163, 163, 163, 163, 1, 2, 3, 4),
+    OR = c(0.79, 18.57, 0.23, 0.76, 1.29, 1.64, 1, 0.16, 13.34, 50.06),
+    Lower_CI = c(0.56, 2.18, 0.03, 0.23, 0.98, 1.15, NA, 0.00, 0.99, 0.01),
+    Upper_CI = c(0.97, 436.83, 0.85, 2.24, 1.86, 2.75, NA, 275.32, 655.68, 2221478.38),
+    P_Value = c(NA, NA, NA, NA, NA, NA, NA, NA, NA, NA)  # 您表格中缺少具体的p值
+  )
+  
+  # 添加变量类型标识
+  forest_data$Variable_Type <- ifelse(grepl("TOAST", forest_data$Variable), "分类变量", "连续变量")
+  
+  # 处理极端值以便更好地显示
+  forest_data$Upper_CI_adj <- ifelse(forest_data$Upper_CI > 100, 100, forest_data$Upper_CI)
+  
+  # 创建森林图
+  p <- ggplot(forest_data, aes(x = OR, y = reorder(Variable, OR))) +
+    # 参考线
+    geom_vline(xintercept = 1, linetype = "dashed", color = "red", alpha = 0.7) +
+    
+    # 点估计和置信区间
+    geom_point(aes(color = Variable_Type, size = N), alpha = 0.7) +
+    geom_errorbarh(aes(xmin = Lower_CI, xmax = Upper_CI_adj, color = Variable_Type), 
+                   height = 0.2, alpha = 0.6) +
+    
+    # 对数尺度
+    scale_x_continuous(trans = "log10", 
+                       breaks = c(0.1, 0.5, 1, 2, 5, 10, 50, 100),
+                       limits = c(0.01, 100)) +
+    
+    # 标签和主题
+    labs(
+      title = "单因素Logistic回归森林图",
+      subtitle = "卒中后疲劳风险因素分析",
+      x = "OR值 (对数尺度)",
+      y = "变量",
+      color = "变量类型",
+      size = "样本量"
+    ) +
+    
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+      plot.subtitle = element_text(hjust = 0.5, size = 12),
+      axis.text.y = element_text(size = 10),
+      axis.text.x = element_text(size = 9),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    ) +
+    
+    # 颜色设置
+    scale_color_manual(values = c("分类变量" = "#E69F00", "连续变量" = "#56B4E9"))
+  
+  # 保存图片
+  ggsave("卒中后疲劳森林图.png", p, width = 12, height = 8, dpi = 300, bg = "white")
+  
+  return(p)
+}
+
+# 生成森林图
+final_plot <- generate_final_forest_plot()
+print(final_plot)
