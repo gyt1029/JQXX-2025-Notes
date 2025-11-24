@@ -1,0 +1,132 @@
+library(tidyverse)
+library(readxl)
+library(officer)
+library(flextable)
+library(car)  # 用于VIF分析
+library(corrplot)  # 用于相关性可视化
+
+# 读取数据
+data <- read_excel("C:\\Users\\g2997\\Desktop\\Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 选择分析变量
+analysis_vars <- data %>%
+  select(fss2_group, ESR, Fasting_Blood_Glucose, ALT, AST, Direct_Bilirubin, 
+         HDL, APTT, PT, INR, Hcy, TSH, T3, HAMD_Total, HAMA_Total)
+
+# 1. 检查变量间的相关性矩阵
+cat("=== 变量间相关性分析 ===\n")
+cor_matrix <- cor(analysis_vars, use = "complete.obs")
+print(round(cor_matrix, 3))
+
+# 2. 可视化相关性矩阵
+png("correlation_plot.png", width = 10, height = 8, units = "in", res = 300)
+corrplot(cor_matrix, method = "color", type = "upper", 
+         order = "hclust", tl.cex = 0.8, tl.col = "black",
+         title = "变量间相关性矩阵", mar = c(0,0,1,0))
+dev.off()
+cat("相关性图已保存为: correlation_plot.png\n")
+
+# 3. 检查高度相关的变量对（相关系数 > 0.7）
+high_cor_pairs <- which(abs(cor_matrix) > 0.7 & upper.tri(cor_matrix), arr.ind = TRUE)
+cat("\n=== 高度相关的变量对 (|r| > 0.7) ===\n")
+if(length(high_cor_pairs) > 0) {
+  high_cor_df <- data.frame(
+    Variable1 = colnames(cor_matrix)[high_cor_pairs[,1]],
+    Variable2 = colnames(cor_matrix)[high_cor_pairs[,2]],
+    Correlation = round(cor_matrix[high_cor_pairs], 3)
+  )
+  print(high_cor_df[order(abs(high_cor_df$Correlation), decreasing = TRUE), ])
+} else {
+  cat("未发现高度相关的变量对 (|r| > 0.7)\n")
+}
+
+# 4. 计算方差膨胀因子(VIF)来检测多重共线性
+# 首先用线性回归计算VIF（逻辑回归的VIF计算类似）
+lm_model <- lm(fss2_group ~ ESR + Fasting_Blood_Glucose + ALT + AST + Direct_Bilirubin + 
+                 HDL + APTT + PT + INR + Hcy + TSH + T3 + HAMD_Total + HAMA_Total, 
+               data = data)
+
+vif_results <- vif(lm_model)
+vif_df <- data.frame(
+  Variable = names(vif_results),
+  VIF = round(vif_results, 2)
+) %>%
+  arrange(desc(VIF))
+
+cat("\n=== 方差膨胀因子(VIF)分析 ===\n")
+cat("VIF > 10 表示严重的多重共线性\n")
+cat("VIF > 5 表示中度多重共线性\n")
+print(vif_df)
+
+# 5. 识别有共线性问题的变量
+problematic_vars <- vif_df %>% filter(VIF > 5)
+if(nrow(problematic_vars) > 0) {
+  cat("\n⚠️ 发现可能存在多重共线性的变量:\n")
+  print(problematic_vars)
+} else {
+  cat("\n✅ 未发现严重的多重共线性问题\n")
+}
+
+
+
+# 7. 创建详细的共线性诊断报告
+doc <- read_docx()
+
+doc <- doc %>%
+  body_add_par("多重共线性诊断报告", style = "heading 1") %>%
+  body_add_par(" ") %>%
+  body_add_par(paste("分析时间:", Sys.Date()), style = "Normal") %>%
+  body_add_par(" ")
+
+# 添加VIF结果表格
+doc <- doc %>%
+  body_add_par("方差膨胀因子(VIF)分析", style = "heading 2") %>%
+  body_add_par("VIF临界值: >10表示严重共线性, >5表示中度共线性", style = "Normal")
+
+ft_vif <- flextable(vif_df) %>%
+  theme_box() %>%
+  bg(bg = "#f5f5f5", part = "header") %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "all") %>%
+  color(~ VIF > 10, ~VIF, color = "red") %>%
+  color(~ VIF > 5 & VIF <= 10, ~VIF, color = "orange")
+
+doc <- body_add_flextable(doc, ft_vif, align = "center")
+
+# 添加高度相关变量对
+if(length(high_cor_pairs) > 0) {
+  doc <- doc %>%
+    body_add_par(" ") %>%
+    body_add_par("高度相关的变量对 (|r| > 0.7)", style = "heading 2")
+  
+  ft_cor <- flextable(high_cor_df) %>%
+    theme_box() %>%
+    bg(bg = "#f5f5f5", part = "header") %>%
+    bold(part = "header") %>%
+    align(align = "center", part = "all")
+  
+  doc <- body_add_flextable(doc, ft_cor, align = "center")
+}
+
+# 添加建议
+doc <- doc %>%
+  body_add_par(" ") %>%
+  body_add_par("处理建议", style = "heading 2") %>%
+  body_add_par("1. 优先移除VIF > 10的变量") %>%
+  body_add_par("2. 对于VIF在5-10之间的变量，基于临床重要性决定是否保留") %>%
+  body_add_par("3. 考虑使用主成分分析(PCA)或岭回归处理共线性") %>%
+  body_add_par("4. 增加样本量可能缓解共线性问题") %>%
+  body_add_par("5. 结合领域知识选择最有临床意义的变量")
+
+# 保存报告
+print(doc, target = "Multicollinearity_Diagnosis_Report.docx")
+
+cat("\n共线性诊断报告已保存为: Multicollinearity_Diagnosis_Report.docx\n")
+
+
+
+cat("\n=== 分析完成 ===\n")
+cat("主要输出文件:\n")
+cat("1. Multicollinearity_Diagnosis_Report.docx - 共线性诊断报告\n")
+cat("2. correlation_plot.png - 相关性矩阵图\n")
+
