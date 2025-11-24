@@ -1,1 +1,120 @@
+# 加载必要的包
+library(readxl)
+library(dplyr)
+library(flextable)
+library(officer)
+library(purrr)
+library(car)
+library(ggplot2)
+#···
+
+# 读取数据
+df <- readxl::read_excel("C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 根据FSS2_Total创建分组变量
+df$FSS_group <- ifelse(df$FSS2_Total >= 36, "FSS组", "非FSS组")
+
+# 创建LT3S变量：符合条件(TSH 0.38~5.33，T3<3.53)的取值为1，否则为0
+df$LT3S <- ifelse(df$TSH >= 0.38 & df$TSH <= 5.33 & df$T3 < 3.53, 1, 0)
+
+# 定义要检验的分类变量
+categorical_vars <- c(
+  "Gender(1:Male,2:Female)", "Smoking(1:Yes,0:No)", 
+  "Drinking(1:Yes,0:No)", "TOAST_Classification", "Treatment(1:Yes,0:No)","LT3S"
+)
+
+# 进行卡方检验
+chi_square_results <- list()
+
+for(var in categorical_vars) {
+  # 创建列联表
+  contingency_table <- table(df[[var]], df$FSS_group)
+  
+  # 执行卡方检验
+  chi_test <- chisq.test(contingency_table)
+  
+  # 保存结果
+  chi_square_results[[var]] <- list(
+    table = contingency_table,
+    chi_square = chi_test$statistic,
+    p_value = chi_test$p.value,
+    df = chi_test$parameter
+  )
+  
+  # 打印结果
+  cat("变量:", var, "\n")
+  cat("列联表:\n")
+  print(contingency_table)
+  cat("卡方值:", chi_test$statistic, "\n")
+  cat("自由度:", chi_test$parameter, "\n")
+  cat("P值:", chi_test$p.value, "\n")
+  cat("------------------------\n\n")
+}
+
+# 创建结果汇总表
+results_summary <- data.frame(
+  变量 = categorical_vars,
+  卡方值 = sapply(chi_square_results, function(x) round(x$chi_square, 3)),
+  自由度 = sapply(chi_square_results, function(x) x$df),
+  P值 = sapply(chi_square_results, function(x) round(x$p_value, 4))
+)
+
+print("卡方检验结果汇总:")
+print(results_summary)
+
+# 生成Word文档表格
+# 安装并加载必要的包
+if (!require(flextable)) install.packages("flextable")
+if (!require(officer)) install.packages("officer")
+library(magrittr)   # 为了使用管道运算符
+library(flextable)
+library(officer)
+
+# 创建flextable对象
+ft <- flextable(results_summary) %>%
+  # 设置表格主题
+  theme_vanilla() %>%
+  # 设置字体大小
+  fontsize(size = 11, part = "all") %>%
+  # 设置表格标题
+  set_caption(caption = "表1：分类变量的卡方检验结果汇总") %>%
+  # 设置列名
+  set_header_labels(
+    变量 = "变量",
+    卡方值 = "卡方值",
+    自由度 = "自由度",
+    P值 = "P值"
+  ) %>%
+  # 设置列宽
+  width(width = c(2.5, 1.5, 1.5, 1.5)) %>%
+  # 居中对齐
+  align(align = "center", part = "all") %>%
+  # 添加边框
+  border_outer(border = fp_border(color = "black", width = 1)) %>%
+  border_inner_h(border = fp_border(color = "black", width = 0.5)) %>%
+  border_inner_v(border = fp_border(color = "black", width = 0.5))
+
+# 打印表格预览
+print(ft)
+
+# 创建Word文档
+doc <- read_docx() %>%
+  # 添加标题
+  body_add_par("卡方检验结果报告", style = "heading 1") %>%
+  body_add_par(" ") %>%  # 空行
+  
+  # 添加表格
+  body_add_flextable(ft) %>%
+  body_add_par(" ") %>%  # 空行
+  
+  # 添加说明
+  body_add_par("说明：", style = "heading 2") %>%
+  body_add_par("1. 本表格展示了各分类变量在FSS组和非FSS组之间的卡方检验结果") %>%
+  body_add_par("2. FSS组定义为FSS2_Total ≥ 36，非FSS组定义为FSS2_Total < 36") %>%
+  body_add_par("3. P值小于0.05表示两组间差异具有统计学意义")
+
+# 保存Word文档
+print(doc, target = "卡方检验结果报告.docx")
+
+cat("Word文档已生成：卡方检验结果报告.docx\n")
 
