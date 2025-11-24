@@ -1,1 +1,129 @@
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
+
+def plot_feature_importance(feature_importance_df, top_n=15):
+    """可视化特征重要性"""
+    plt.figure(figsize=(12, 10))
+    top_features = feature_importance_df.head(top_n)
+    sns.barplot(data=top_features, x='importance', y='feature')
+    plt.title(f'Top {top_n} 特征重要性 (随机森林)', fontsize=16, fontweight='bold')
+    plt.xlabel('特征重要性', fontsize=12)
+    plt.ylabel('特征名称', fontsize=12)
+    plt.tight_layout()
+    plt.savefig('feature_importance.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_model_comparison(comparison_df):
+    """可视化模型比较结果"""
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+
+    # 1. AUC比较
+    axes[0, 0].barh(comparison_df['Model'], comparison_df['AUC'], color='skyblue')
+    axes[0, 0].set_xlabel('AUC值', fontsize=12)
+    axes[0, 0].set_title('模型AUC比较', fontsize=14, fontweight='bold')
+    axes[0, 0].set_xlim([0, 1])
+    for i, v in enumerate(comparison_df['AUC']):
+        axes[0, 0].text(v + 0.01, i, f'{v:.3f}', va='center', fontsize=10)
+
+    # 2. 准确性与平衡准确性比较
+    x = np.arange(len(comparison_df['Model']))
+    width = 0.35
+    axes[0, 1].bar(x - width/2, comparison_df['Accuracy'], width, label='准确性', color='lightcoral')
+    axes[0, 1].bar(x + width/2, comparison_df['Balanced_Accuracy'], width, label='平衡准确性', color='lightgreen')
+    axes[0, 1].set_xlabel('模型', fontsize=12)
+    axes[0, 1].set_ylabel('分数', fontsize=12)
+    axes[0, 1].set_title('准确性与平衡准确性比较', fontsize=14, fontweight='bold')
+    axes[0, 1].set_xticks(x)
+    axes[0, 1].set_xticklabels(comparison_df['Model'], rotation=45, ha='right')
+    axes[0, 1].legend()
+    axes[0, 1].set_ylim([0, 1])
+
+    # 3. 敏感性与特异性比较
+    axes[1, 0].bar(x - width/2, comparison_df['Sensitivity'], width, label='敏感性', color='lightgreen')
+    axes[1, 0].bar(x + width/2, comparison_df['Specificity'], width, label='特异性', color='gold')
+    axes[1, 0].set_xlabel('模型', fontsize=12)
+    axes[1, 0].set_ylabel('分数', fontsize=12)
+    axes[1, 0].set_title('敏感性与特异性比较', fontsize=14, fontweight='bold')
+    axes[1, 0].set_xticks(x)
+    axes[1, 0].set_xticklabels(comparison_df['Model'], rotation=45, ha='right')
+    axes[1, 0].legend()
+    axes[1, 0].set_ylim([0, 1])
+
+    # 4. 交叉验证稳定性比较
+    axes[1, 1].bar(comparison_df['Model'], comparison_df['CV_AUC_Mean'], 
+                   yerr=comparison_df['CV_AUC_Std'], capsize=5, color='lightsteelblue', alpha=0.7)
+    axes[1, 1].set_xlabel('模型', fontsize=12)
+    axes[1, 1].set_ylabel('AUC值', fontsize=12)
+    axes[1, 1].set_title('交叉验证AUC比较（带标准差）', fontsize=14, fontweight='bold')
+    axes[1, 1].tick_params(axis='x', rotation=45)
+    axes[1, 1].set_ylim([0, 1])
+    for i, v in enumerate(comparison_df['CV_AUC_Mean']):
+        axes[1, 1].text(i, v + 0.02, f'{v:.3f}', ha='center', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig('model_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_roc_curves(results, y_test):
+    """绘制ROC曲线比较"""
+    plt.figure(figsize=(12, 10))
+    colors = ['blue', 'green', 'red', 'purple', 'orange', 'brown']
+
+    for i, result in enumerate(results):
+        fpr, tpr, _ = roc_curve(y_test, result['y_pred_proba'])
+        auc_score = result['AUC']
+        plt.plot(fpr, tpr, lw=3, color=colors[i], 
+                 label=f"{result['Model']} (AUC = {auc_score:.3f})")
+
+    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', alpha=0.5, label='随机分类器')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('假正率 (1 - 特异性)', fontsize=14)
+    plt.ylabel('真正率 (敏感性)', fontsize=14)
+    plt.title('多算法ROC曲线比较', fontsize=18, fontweight='bold')
+    plt.legend(loc="lower right", fontsize=12)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('roc_curves_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_confusion_matrix(y_test, y_pred, model_name):
+    """绘制混淆矩阵"""
+    plt.figure(figsize=(8, 6))
+    cm = confusion_matrix(y_test, y_pred)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+               xticklabels=['不疲劳', '疲劳'], 
+               yticklabels=['不疲劳', '疲劳'])
+    plt.title(f'{model_name} - 混淆矩阵', fontsize=16, fontweight='bold')
+    plt.xlabel('预测标签', fontsize=12)
+    plt.ylabel('真实标签', fontsize=12)
+    plt.tight_layout()
+    plt.savefig('best_model_confusion_matrix.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_prediction_probability_distribution(results, y_test):
+    """绘制预测概率分布"""
+    plt.figure(figsize=(12, 8))
+    for i, result in enumerate(results):
+        pred_df = pd.DataFrame({
+            '概率': result['y_pred_proba'],
+            '真实类别': y_test
+        })
+        
+        plt.subplot(2, 3, i+1)
+        for class_label in [0, 1]:
+            class_data = pred_df[pred_df['真实类别'] == class_label]['概率']
+            plt.hist(class_data, bins=20, alpha=0.5, label=f'类别 {class_label}')
+        
+        plt.title(f'{result["Model"]}')
+        plt.xlabel('预测概率')
+        plt.ylabel('频数')
+        plt.legend()
+
+    plt.tight_layout()
+    plt.savefig('prediction_probability_distribution.png', dpi=300, bbox_inches='tight')
+    plt.show()
