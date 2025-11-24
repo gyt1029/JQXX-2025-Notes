@@ -1,1 +1,28 @@
+from sklearn.svm import SVC
+from sklearn.pipeline import Pipeline
 
+def create_svm_model(preprocessor, class_weight_dict=None):
+    """创建支持向量机模型"""
+    if class_weight_dict is None:
+        class_weight_dict = 'balanced'
+    
+    model = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('classifier', SVC(probability=True, random_state=42, class_weight=class_weight_dict))
+    ])
+    
+    return model
+
+def tune_svm(model, X_train, y_train):
+    """SVM超参数调优"""
+    param_grid = {
+        'classifier__C': [0.1, 1, 10, 100],
+        'classifier__kernel': ['linear', 'rbf'],
+        'classifier__gamma': ['scale', 'auto']
+    }
+    
+    grid_search = GridSearchCV(model, param_grid, cv=5, scoring='roc_auc', n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    
+    print(f"SVM最佳参数: {grid_search.best_params_}")
+    return grid_search.best_estimator_
