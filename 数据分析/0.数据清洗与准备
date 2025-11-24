@@ -1,19 +1,24 @@
-# 科学合理的数据清洗流程
+# 加载必要的包
 library(dplyr)
-library(readr)
+library(readxl)
 library(lubridate)
 library(VIM)
 library(caret)
+library(summarytools)
+library(ggplot2)
+library(moments)
 
+# 设置文件路径
+input_file <- "C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire_2.xlsx"
+output_file <- "C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire_cleaned.csv"
+
+# 科学合理的数据清洗流程
 scientific_data_cleaning <- function(file_path, output_file) {
-  """
-  科学合理的数据清洗流程
-  """
-  
+
   # 1. 数据加载与初步检查
   cat("=== 数据加载与初步检查 ===\n")
   df <- tryCatch({
-    data <- read_csv(file_path)
+    data <- read_excel(file_path)
     cat("数据加载成功，维度:", dim(data), "\n")
     data
   }, error = function(e) {
@@ -47,27 +52,35 @@ scientific_data_cleaning <- function(file_path, output_file) {
   cat("\n=== 最终数据质量报告 ===\n")
   print_data_quality(df_cleaned)
   
+  # 7. 生成详细数据质量报告
+  cat("\n=== 生成详细数据质量报告 ===\n")
+  generate_detailed_report(df_cleaned)
+  
   # 保存结果
-  write_csv(df_cleaned, output_file)
+  write.csv(df_cleaned, output_file, row.names = FALSE)
   cat("\n清洗后的数据已保存到:", output_file, "\n")
   
   return(df_cleaned)
 }
 
 handle_missing_values <- function(df) {
-  """
-  智能处理缺失值
-  """
+
   missing_summary <- colSums(is.na(df))
   cat("各变量缺失值数量:\n")
   print(missing_summary[missing_summary > 0])
   
-  # 删除缺失率过高的列（>50%）
+  # 计算缺失率
   missing_rates <- colSums(is.na(df)) / nrow(df)
+  cat("\n各变量缺失率:\n")
+  for (col in names(missing_rates[missing_rates > 0])) {
+    cat(sprintf("  %s: %.2f%%\n", col, missing_rates[col] * 100))
+  }
+  
+  # 删除缺失率过高的列（>50%）
   high_missing_cols <- names(missing_rates[missing_rates > 0.5])
   
   if (length(high_missing_cols) > 0) {
-    cat("删除缺失率超过50%的列:", paste(high_missing_cols, collapse = ", "), "\n")
+    cat("\n删除缺失率超过50%的列:", paste(high_missing_cols, collapse = ", "), "\n")
     df <- df %>% select(-all_of(high_missing_cols))
   }
   
@@ -77,18 +90,38 @@ handle_missing_values <- function(df) {
   
   # 对数值型变量使用KNN插补
   if (length(numeric_cols) > 0 && sum(is.na(df[numeric_cols])) > 0) {
-    cat("对数值型变量使用KNN插补...\n")
-    numeric_imputed <- VIM::kNN(df[numeric_cols], k = 5, scale = FALSE)
-    df[numeric_cols] <- numeric_imputed %>% select(all_of(numeric_cols))
+    cat("\n对数值型变量使用KNN插补...\n")
+    tryCatch({
+      numeric_imputed <- VIM::kNN(df[numeric_cols], k = min(5, nrow(df) - 1), scale = FALSE)
+      df[numeric_cols] <- numeric_imputed %>% select(all_of(numeric_cols))
+      cat("数值型变量KNN插补完成\n")
+    }, error = function(e) {
+      cat("KNN插补失败，使用均值/中位数填充:", e$message, "\n")
+      # 备用方法：使用均值/中位数填充
+      for (col in numeric_cols) {
+        if (any(is.na(df[[col]]))) {
+          # 根据偏度决定使用均值还是中位数
+          skew_val <- moments::skewness(df[[col]], na.rm = TRUE)
+          if (abs(skew_val) > 1) { # 偏态分布使用中位数
+            df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+          } else { # 对称分布使用均值
+            df[[col]][is.na(df[[col]])] <- mean(df[[col]], na.rm = TRUE)
+          }
+        }
+      }
+    })
   }
   
   # 对非数值型变量使用众数填充或标记为"未知"
   for (col in non_numeric_cols) {
     if (any(is.na(df[[col]]))) {
       mode_val <- names(sort(table(df[[col]]), decreasing = TRUE))[1]
-      if (!is.null(mode_val)) {
+      if (!is.null(mode_val) && !is.na(mode_val)) {
         df[[col]][is.na(df[[col]])] <- mode_val
         cat("变量", col, "的缺失值用众数'", mode_val, "'填充\n")
+      } else {
+        df[[col]][is.na(df[[col]])] <- "未知"
+        cat("变量", col, "的缺失值标记为'未知'\n")
       }
     }
   }
@@ -97,9 +130,7 @@ handle_missing_values <- function(df) {
 }
 
 handle_duplicates <- function(df) {
-  """
-  处理重复值
-  """
+
   duplicates <- sum(duplicated(df))
   if (duplicates > 0) {
     cat("发现", duplicates, "个完全重复的行，已删除\n")
@@ -111,11 +142,9 @@ handle_duplicates <- function(df) {
 }
 
 convert_data_types <- function(df) {
-  """
-  智能数据类型转换
-  """
+
   # 尝试识别并转换日期变量
-  date_patterns <- c("date", "Date", "time", "Time")
+  date_patterns <- c("date", "Date", "time", "Time", "day", "Day")
   for (col in colnames(df)) {
     if (any(grepl(paste(date_patterns, collapse = "|"), col))) {
       if (is.character(df[[col]])) {
@@ -136,9 +165,26 @@ convert_data_types <- function(df) {
   char_cols <- df %>% select(where(is.character)) %>% colnames()
   for (col in char_cols) {
     unique_vals <- length(unique(df[[col]]))
-    if (unique_vals <= 10 && unique_vals < nrow(df) * 0.1) {
+    if (unique_vals <= 20 && unique_vals < nrow(df) * 0.3) {
       df[[col]] <- as.factor(df[[col]])
       cat("变量", col, "已转换为因子（", unique_vals, "个水平）\n")
+    }
+  }
+  
+  # 检查是否有应该是数值型但被识别为字符型的变量
+  for (col in char_cols) {
+    if (col %in% names(df)) {  # 确保列仍然存在
+      # 尝试转换为数值型
+      converted <- tryCatch({
+        as.numeric(df[[col]])
+      }, error = function(e) {
+        return(NULL)
+      })
+      if (!is.null(converted) && !all(is.na(converted)) && 
+          sum(!is.na(converted)) > nrow(df) * 0.5) {
+        df[[col]] <- converted
+        cat("变量", col, "已转换为数值型\n")
+      }
     }
   }
   
@@ -146,13 +192,18 @@ convert_data_types <- function(df) {
 }
 
 detect_outliers <- function(df) {
-  """
-  检测并报告异常值（不自动删除）
-  """
+
   numeric_cols <- df %>% select(where(is.numeric)) %>% colnames()
   
   if (length(numeric_cols) > 0) {
     cat("数值变量异常值检测（IQR方法）:\n")
+    outlier_summary <- data.frame(
+      变量 = character(),
+      异常值数量 = integer(),
+      异常值比例 = numeric(),
+      stringsAsFactors = FALSE
+    )
+    
     for (col in numeric_cols) {
       Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
       Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
@@ -161,34 +212,143 @@ detect_outliers <- function(df) {
       upper_bound <- Q3 + 1.5 * IQR_val
       
       outliers <- which(df[[col]] < lower_bound | df[[col]] > upper_bound)
-      if (length(outliers) > 0) {
-        cat(" ", col, ": ", length(outliers), "个潜在异常值（", 
-            round(length(outliers)/nrow(df)*100, 1), "%）\n")
-        # 可选的：显示异常值详情
-        if (length(outliers) <= 10) {
-          cat("    异常值索引:", paste(outliers, collapse = ", "), "\n")
-        }
+      outlier_count <- length(outliers)
+      outlier_percent <- round(outlier_count/nrow(df)*100, 1)
+      
+      outlier_summary <- rbind(outlier_summary, data.frame(
+        变量 = col,
+        异常值数量 = outlier_count,
+        异常值比例 = outlier_percent
+      ))
+      
+      if (outlier_count > 0) {
+        cat("  ", col, ": ", outlier_count, "个潜在异常值（", 
+            outlier_percent, "%）\n")
       } else {
-        cat(" ", col, ": 无异常值\n")
+        cat("  ", col, ": 无异常值\n")
       }
     }
+    
+    # 可视化异常值
+    if (nrow(outlier_summary) > 0 && any(outlier_summary$异常值数量 > 0)) {
+      cat("\n生成异常值可视化...\n")
+      tryCatch({
+        # 选择有异常值的变量进行可视化
+        vars_with_outliers <- outlier_summary %>% 
+          filter(异常值数量 > 0) %>% 
+          pull(变量)
+        
+        if (length(vars_with_outliers) > 0) {
+          # 创建箱线图
+          for (i in 1:min(4, length(vars_with_outliers))) { # 最多显示4个图
+            var <- vars_with_outliers[i]
+            p <- ggplot(df, aes(y = .data[[var]])) +
+              geom_boxplot(fill = "lightblue", alpha = 0.7) +
+              labs(title = paste("异常值检测 -", var), y = var) +
+              theme_minimal()
+            print(p)
+          }
+        }
+      }, error = function(e) {
+        cat("异常值可视化失败:", e$message, "\n")
+      })
+    }
+  } else {
+    cat("没有数值型变量可供异常值检测\n")
   }
 }
 
 print_data_quality <- function(df) {
-  """
-  打印数据质量报告
-  """
+
   cat("数据维度:", dim(df), "\n")
   cat("总缺失值:", sum(is.na(df)), "\n")
-  cat("变量类型:\n")
-  print(sapply(df, class))
-  cat("\n基本统计信息:\n")
+  
+  # 变量类型统计
+  var_types <- table(sapply(df, class))
+  cat("变量类型分布:\n")
+  for (type in names(var_types)) {
+    cat("  ", type, ":", var_types[type], "个\n")
+  }
+  
+  # 数值变量统计
   numeric_df <- df %>% select(where(is.numeric))
   if (ncol(numeric_df) > 0) {
+    cat("\n数值变量基本统计信息:\n")
     print(summary(numeric_df))
   }
 }
 
-# 使用示例
-# cleaned_data <- scientific_data_cleaning("test_data.csv", "cleaned_data.csv")
+generate_detailed_report <- function(df) {
+
+  tryCatch({
+    cat("\n生成详细数据质量报告...\n")
+    
+    # 使用summarytools生成详细报告
+    print(dfSummary(df, 
+                    style = "grid", 
+                    plain.ascii = FALSE, 
+                    graph.magnif = 0.7,
+                    valid.col = FALSE,
+                    tmp.img.dir = "/tmp"),
+          method = 'render')
+    
+    # 生成变量相关性热图（如果有多个数值变量）
+    numeric_cols <- df %>% select(where(is.numeric)) %>% colnames()
+    if (length(numeric_cols) > 1) {
+      cat("\n数值变量相关性分析:\n")
+      cor_matrix <- cor(df[numeric_cols], use = "complete.obs")
+      print(round(cor_matrix, 3))
+      
+      # 识别高相关性变量对
+      high_cor <- which(abs(cor_matrix) > 0.7 & abs(cor_matrix) < 1, arr.ind = TRUE)
+      if (nrow(high_cor) > 0) {
+        cat("\n高相关性变量对 (|r| > 0.7):\n")
+        for (i in 1:nrow(high_cor)) {
+          row_idx <- high_cor[i, 1]
+          col_idx <- high_cor[i, 2]
+          if (row_idx < col_idx) { # 避免重复
+            cat("  ", numeric_cols[row_idx], "与", numeric_cols[col_idx], 
+                ": r =", round(cor_matrix[row_idx, col_idx], 3), "\n")
+          }
+        }
+      }
+    }
+    
+  }, error = function(e) {
+    cat("详细报告生成失败:", e$message, "\n")
+  })
+}
+
+# 执行数据清洗
+cat("开始分析卒中后疲劳问卷数据...\n")
+cat("输入文件:", input_file, "\n")
+cat("输出文件:", output_file, "\n\n")
+
+cleaned_data <- scientific_data_cleaning(input_file, output_file)
+
+if (!is.null(cleaned_data)) {
+  cat("\n=== 数据分析完成 ===\n")
+  cat("原始数据维度:", dim(read_excel(input_file)), "\n")
+  cat("清洗后数据维度:", dim(cleaned_data), "\n")
+  cat("处理后的数据已保存至:", output_file, "\n")
+  
+  # 最终建议
+  cat("\n=== 数据质量改进建议 ===\n")
+  numeric_vars <- cleaned_data %>% select(where(is.numeric)) %>% colnames()
+  if (length(numeric_vars) > 0) {
+    cat("1. 数值变量数量:", length(numeric_vars), "\n")
+  }
+  
+  factor_vars <- cleaned_data %>% select(where(is.factor)) %>% colnames()
+  if (length(factor_vars) > 0) {
+    cat("2. 分类变量数量:", length(factor_vars), "\n")
+  }
+  
+  cat("3. 建议进一步分析:\n")
+  cat("   - 检查异常值的临床意义\n")
+  cat("   - 验证关键变量的分布是否符合预期\n")
+  cat("   - 进行变量间的相关性分析\n")
+  cat("   - 考虑变量转换（如对数转换）处理偏态分布\n")
+} else {
+  cat("\n!!! 数据处理失败 !!!\n")
+}
