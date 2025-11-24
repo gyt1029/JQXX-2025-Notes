@@ -1,1 +1,156 @@
+# 加载必要的包
+library(readxl)
+library(dplyr)
+library(flextable)
+library(officer)
+library(purrr)
+library(car)
+library(ggplot2)
+#···
 
+# 读取数据
+data <- read_excel("C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 分组
+data$fss_group <- ifelse(data$FSS2_Total >= 36, "FSS", "Non_FSS")
+
+# 变量列表
+vars <- c(
+  "Age", "Height", "Weight", "Fasting_Blood_Glucose", "Postprandial_Blood_Glucose",
+  "WBC_Count", "Neu_Count", "Lym_Count", "Mon_Count", "NLR", "MLR", "ESR",
+  "ALT", "AST", "Total_Bilirubin", "Direct_Bilirubin", "Urea", "Creatinine", 
+  "Creatinine_Clearance", "TG", "TC", "HDL", "LDL", "APTT", "PT", "TT", "INR", 
+  "FIB", "D_Dimer", "Hcy", "TSH", "T3", "T4", "EF", "MMSE_Score", "NIHSS_Total",
+  "FSS1_Total", "HAMD_Total", "HAMA_Total"  
+)
+
+# 创建存储结果的列表
+wilcox_results <- list()
+
+# 遍历每个变量进行检验
+for(var in vars) {
+  if(var %in% names(data)) {
+    cat("\n=== 变量:", var, "===\n")
+    
+    # 检查缺失值
+    complete_cases <- complete.cases(data[[var]], data$fss_group)
+    n_complete <- sum(complete_cases)
+    
+    if(n_complete < 10) {
+      cat("警告: 完整案例数不足 (n =", n_complete, ")，跳过该变量\n")
+      next
+    }
+    
+    # 进行Wilcoxon秩和检验
+    wilcox_result <- wilcox.test(data[[var]] ~ data$fss_group, 
+                                 exact = FALSE,  # 精确计算在大样本时可能很慢
+                                 correct = TRUE) # 使用连续性校正
+    
+    # 存储结果
+    wilcox_results[[var]] <- list(
+      variable = var,
+      wilcox_test = wilcox_result,
+      n_complete = n_complete
+    )
+    
+    # 打印检验结果
+    print(wilcox_result)
+  }
+}
+
+# 生成非参数检验结果表格并输出到Word
+generate_wilcox_word_table <- function(wilcox_results, output_file = "非参数检验结果.docx") {
+  
+  # 整理非参数检验结果
+  results_df <- map_df(names(wilcox_results), function(var) {
+    result <- wilcox_results[[var]]
+    
+    # 提取Wilcoxon检验结果
+    wilcox_test <- result$wilcox_test
+    
+    # 计算中位数和四分位数间距
+    data_temp <- data[complete.cases(data[[var]], data$fss_group), ]
+    medians <- tapply(data_temp[[var]], data_temp$fss_group, median, na.rm = TRUE)
+    q1 <- tapply(data_temp[[var]], data_temp$fss_group, quantile, probs = 0.25, na.rm = TRUE)
+    q3 <- tapply(data_temp[[var]], data_temp$fss_group, quantile, probs = 0.75, na.rm = TRUE)
+    
+    data.frame(
+      变量 = var,
+      检验方法 = "Wilcoxon秩和检验",
+      `FSS组中位数(四分位数间距)` = sprintf("%.2f (%.2f-%.2f)", medians["FSS"], q1["FSS"], q3["FSS"]),
+      `Non-FSS组中位数(四分位数间距)` = sprintf("%.2f (%.2f-%.2f)", medians["Non_FSS"], q1["Non_FSS"], q3["Non_FSS"]),
+      `W统计量` = sprintf("%.3f", wilcox_test$statistic),
+      `P值` = sprintf("%.4f", wilcox_test$p.value),
+      `显著性` = ifelse(wilcox_test$p.value < 0.001, "***", 
+                     ifelse(wilcox_test$p.value < 0.01, "**", 
+                            ifelse(wilcox_test$p.value < 0.05, "*", "不显著"))),
+      `样本量` = result$n_complete,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    )
+  })
+  
+  # 创建flextable
+  ft <- flextable(results_df) %>%
+    # 设置表格主题
+    theme_booktabs() %>%
+    # 设置列宽
+    width(width = 1.2) %>%
+    # 添加表头
+    add_header_lines(values = "组间比较非参数检验结果") %>%
+    # 设置表头格式
+    bold(part = "header") %>%
+    # 设置字体大小
+    fontsize(size = 10, part = "all") %>%
+    # 自动调整列宽
+    autofit() %>%
+    # 添加边框
+    border_outer(border = fp_border(color = "black", width = 1)) %>%
+    border_inner_h(border = fp_border(color = "gray", width = 0.5)) %>%
+    border_inner_v(border = fp_border(color = "gray", width = 0.5)) %>%
+    # 居中对齐
+    align(align = "center", part = "all") %>%
+    # 左对齐第一列
+    align(j = 1, align = "left") %>%
+    # 设置显著性列的颜色
+    color(~ `显著性` == "***", ~ `显著性`, color = "red") %>%
+    color(~ `显著性` == "**", ~ `显著性`, color = "darkorange") %>%
+    color(~ `显著性` == "*", ~ `显著性`, color = "blue") %>%
+    # 添加脚注说明显著性水平
+    add_footer_lines(values = "显著性说明: * p<0.05, ** p<0.01, *** p<0.001") %>%
+    # 设置脚注格式
+    italic(part = "footer") %>%
+    fontsize(size = 9, part = "footer")
+  
+  # 创建Word文档
+  doc <- read_docx() %>%
+    # 添加标题
+    body_add_par("非参数检验统计分析结果", style = "heading 1") %>%
+    body_add_par(paste("生成时间:", Sys.Date()), style = "Normal") %>%
+    body_add_par("") %>%
+    # 添加表格
+    body_add_flextable(ft) %>%
+    # 添加说明文字
+    body_add_par("") %>%
+    body_add_par("表格说明:", style = "heading 2") %>%
+    body_add_par("1. 本表格展示了PSF组(FSS2≥36)与非PSF组(FSS2<36)在各连续变量上的比较结果") %>%
+    body_add_par("2. 使用Wilcoxon秩和检验（Mann-Whitney U检验）进行组间比较") %>%
+    body_add_par("3. 数据以中位数(第一四分位数-第三四分位数)表示") %>%
+    body_add_par("4. 非参数检验不依赖于数据分布假设，适用于非正态分布数据")
+  
+  # 保存文档
+  print(doc, target = output_file)
+  
+  cat("非参数检验表格已保存至:", output_file, "\n")
+  
+  return(list(flextable = ft, data = results_df))
+}
+
+# 执行函数生成Word表格
+wilcox_table <- generate_wilcox_word_table(wilcox_results, "非参数检验统计分析结果.docx")
+
+# 在RStudio中预览表格
+wilcox_table$flextable
+
+# 查看数据
+print(wilcox_table$data)
