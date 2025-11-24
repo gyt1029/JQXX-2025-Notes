@@ -1,6 +1,54 @@
 https://github.com/gyt1029/JQXX-2025-Notes/commit/cb27808d3ae41dc9e09ee7e0bf4401b8d5797496
 
-def validate_data(df, target_column='fss2_group'):
+# -*- coding: utf-8 -*-
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import warnings
+warnings.filterwarnings('ignore')
+
+def load_and_validate_data(file_path=None):
+    """加载并验证数据"""
+    if file_path is None:
+        current_dir = Path.cwd()
+        file_path = current_dir / "your_data_file.xlsx"
+    
+    try:
+        df = pd.read_excel(file_path)
+        print(f"成功加载数据，数据集形状: {df.shape}")
+        return df
+    except FileNotFoundError:
+        print(f"错误: 文件未找到: {file_path}")
+        exit(1)
+    except Exception as e:
+        print(f"加载数据时出错: {e}")
+        exit(1)
+
+def clean_column_names(df):
+    """清理列名，参考R代码的处理方式"""
+    df_clean = df.copy()
+    
+    # 替换特殊字符
+    df_clean.columns = (df_clean.columns
+                       .str.replace(r'[()]', '_', regex=True)
+                       .str.replace(r'[:]', '_', regex=True)
+                       .str.replace(r'[ ]', '_', regex=True)
+                       .str.replace(r'[,]', '_', regex=True))
+    
+    # 确保列名是有效的Python标识符
+    import re
+    def make_valid_name(name):
+        name = name.strip('_')
+        name = re.sub(r'_+', '_', name)
+        if name and not name[0].isalpha() and name[0] != '_':
+            name = '_' + name
+        return name
+    
+    df_clean.columns = [make_valid_name(col) for col in df_clean.columns]
+    print(f"列名清理完成，示例: {list(df_clean.columns[:5])}")
+    return df_clean
+
+def validate_data(df, target_column):
     """验证数据质量"""
     if target_column not in df.columns:
         raise ValueError(f"目标列 {target_column} 不存在于数据中")
@@ -14,3 +62,36 @@ def validate_data(df, target_column='fss2_group'):
         print("警告: 目标变量缺失值超过50%，数据质量可能有问题")
     
     return True
+
+def reduce_memory_usage(df):
+    """减少内存使用"""
+    print("优化内存使用...")
+    start_mem = df.memory_usage(deep=True).sum() / 1024**2
+    
+    for col in df.select_dtypes(include=[np.number]).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer', errors='ignore')
+    
+    for col in df.select_dtypes(include=['object']).columns:
+        if df[col].nunique() / len(df) < 0.5:
+            df[col] = df[col].astype('category')
+    
+    end_mem = df.memory_usage(deep=True).sum() / 1024**2
+    print(f"内存使用从 {start_mem:.2f} MB 减少到 {end_mem:.2f} MB ({((start_mem - end_mem) / start_mem * 100):.1f}%)")
+    
+    return df
+
+def split_data(df, target_column, test_size=0.3, random_state=42):
+    """数据划分"""
+    X = df.drop(target_column, axis=1)
+    y = df[target_column].astype(int)
+    
+    from sklearn.model_selection import train_test_split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state, stratify=y
+    )
+    
+    print(f"训练集大小: {X_train.shape}")
+    print(f"测试集大小: {X_test.shape}")
+    print(f"训练集中类别分布:\n{y_train.value_counts()}")
+    
+    return X_train, X_test, y_train, y_test
