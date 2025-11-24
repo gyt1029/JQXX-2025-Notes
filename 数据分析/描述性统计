@@ -1,1 +1,124 @@
+# 加载必要的包
+library(readxl)
+library(dplyr)
+library(flextable)
+library(officer)
+library(purrr)
+library(car)
+library(ggplot2)
+#···
 
+
+# 读取数据
+data <- read_excel("C:/Users/g2997/Desktop/Post-Stroke Fatigue Questionnaire.xlsx")
+
+# 定义变量
+continuous_vars <- c(
+  "Age", "Height", "Weight", "Fasting_Blood_Glucose", "Postprandial_Blood_Glucose",
+  "WBC_Count", "Neu_Count", "Lym_Count", "Mon_Count", "NLR", "MLR", "ESR",
+  "ALT", "AST", "Total_Bilirubin", "Direct_Bilirubin", "Urea", "Creatinine", 
+  "Creatinine_Clearance", "TG", "TC", "HDL", "LDL", "APTT", "PT", "TT", "INR", 
+  "FIB", "D_Dimer", "Hcy", "TSH", "T3", "T4", "EF", "MMSE_Score", "NIHSS_Total",
+  "FSS1_Total", "HAMD_Total", "HAMA_Total"
+)
+
+categorical_vars <- c(
+  "Gender(1:Male,2:Female)", "Smoking(1:Yes,0:No)", 
+  "Drinking(1:Yes,0:No)", "TOAST_Classification", "Treatment(1:Yes,0:No)"
+)
+
+# 筛选实际存在的变量
+existing_continuous <- continuous_vars[continuous_vars %in% names(data)]
+existing_categorical <- categorical_vars[categorical_vars %in% names(data)]
+
+# 将分类变量转换为因子（重要步骤）
+for(var in existing_categorical) {
+  if(var %in% names(data)) {
+    data[[var]] <- as.factor(data[[var]])
+  }
+}
+
+# 函数：数值变量的正态性检验和描述
+describe_numeric <- function(variable, variable_name) {
+  # 移除缺失值
+  variable <- variable[!is.na(variable)]
+  # 正态性检验
+  shapiro_test <- shapiro.test(variable)
+  p_value <- shapiro_test$p.value
+  
+  if (p_value >= 0.05) {
+    # 符合正态分布：均数 ± 标准差
+    mean_val <- mean(variable, na.rm = TRUE)
+    sd_val <- sd(variable, na.rm = TRUE)
+    description <- sprintf("%.2f ± %.2f", mean_val, sd_val)
+    distribution <- "正态分布"
+  } else {
+    # 不符合正态分布：中位数（四分位数间距）
+    median_val <- median(variable, na.rm = TRUE)
+    q1 <- quantile(variable, 0.25, na.rm = TRUE)
+    q3 <- quantile(variable, 0.75, na.rm = TRUE)
+    description <- sprintf("%.2f (%.2f-%.2f)", median_val, q1, q3)
+    distribution <- "非正态分布"
+  }
+  # 返回数据框
+  data.frame(
+    Variable = variable_name,
+    Description = description,
+    Distribution = distribution,
+    stringsAsFactors = FALSE
+  )
+}
+
+# 函数：分类变量的描述
+describe_categorical <- function(variable, variable_name) {
+  # 移除缺失值
+  variable <- variable[!is.na(variable)]
+  # 计算频数和百分比
+  freq_table <- table(variable)
+  pct_table <- prop.table(freq_table) * 100
+  
+  # 创建描述字符串
+  categories <- names(freq_table)
+  descriptions <- sapply(seq_along(categories), function(i) {
+    sprintf("%s: %d (%.1f%%)", categories[i], freq_table[i], pct_table[i])
+  })
+  
+  description <- paste(descriptions, collapse = "; ")
+  
+  # 返回数据框
+  data.frame(
+    Variable = variable_name,
+    Description = description,
+    Distribution = "分类变量",
+    stringsAsFactors = FALSE
+  )
+}
+
+# 修改后的创建表一函数
+create_table_one <- function(data) {
+  # 直接使用预定义的变量列表，而不是根据数据类型判断
+  numeric_results <- map2_df(data[existing_continuous], existing_continuous, describe_numeric)
+  categorical_results <- map2_df(data[existing_categorical], existing_categorical, describe_categorical)
+  
+  # 合并结果
+  table_one <- bind_rows(numeric_results, categorical_results)
+  
+  return(table_one)
+}
+
+# 生成表一
+table_one <- create_table_one(data)
+
+# 查看结果
+print(table_one)
+
+# 使用flextable创建更美观的表格
+ft <- flextable(table_one) %>%
+  autofit() %>%
+  theme_zebra()
+
+# 在RStudio中预览
+ft
+
+# 保存为Word文档
+save_as_docx(ft, path = "表一结果.docx")
