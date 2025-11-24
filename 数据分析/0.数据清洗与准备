@@ -1,0 +1,194 @@
+# 科学合理的数据清洗流程
+library(dplyr)
+library(readr)
+library(lubridate)
+library(VIM)
+library(caret)
+
+scientific_data_cleaning <- function(file_path, output_file) {
+  """
+  科学合理的数据清洗流程
+  """
+  
+  # 1. 数据加载与初步检查
+  cat("=== 数据加载与初步检查 ===\n")
+  df <- tryCatch({
+    data <- read_csv(file_path)
+    cat("数据加载成功，维度:", dim(data), "\n")
+    data
+  }, error = function(e) {
+    cat("数据加载失败:", e$message, "\n")
+    return(NULL)
+  })
+  
+  if (is.null(df)) return(NULL)
+  
+  # 初步数据质量报告
+  cat("\n原始数据质量报告:\n")
+  print_data_quality(df)
+  
+  # 2. 智能缺失值处理
+  cat("\n=== 缺失值处理 ===\n")
+  df_cleaned <- handle_missing_values(df)
+  
+  # 3. 重复值处理
+  cat("\n=== 重复值处理 ===\n")
+  df_cleaned <- handle_duplicates(df_cleaned)
+  
+  # 4. 数据类型转换
+  cat("\n=== 数据类型转换 ===\n")
+  df_cleaned <- convert_data_types(df_cleaned)
+  
+  # 5. 异常值检测（不自动删除）
+  cat("\n=== 异常值检测 ===\n")
+  detect_outliers(df_cleaned)
+  
+  # 6. 最终质量报告
+  cat("\n=== 最终数据质量报告 ===\n")
+  print_data_quality(df_cleaned)
+  
+  # 保存结果
+  write_csv(df_cleaned, output_file)
+  cat("\n清洗后的数据已保存到:", output_file, "\n")
+  
+  return(df_cleaned)
+}
+
+handle_missing_values <- function(df) {
+  """
+  智能处理缺失值
+  """
+  missing_summary <- colSums(is.na(df))
+  cat("各变量缺失值数量:\n")
+  print(missing_summary[missing_summary > 0])
+  
+  # 删除缺失率过高的列（>50%）
+  missing_rates <- colSums(is.na(df)) / nrow(df)
+  high_missing_cols <- names(missing_rates[missing_rates > 0.5])
+  
+  if (length(high_missing_cols) > 0) {
+    cat("删除缺失率超过50%的列:", paste(high_missing_cols, collapse = ", "), "\n")
+    df <- df %>% select(-all_of(high_missing_cols))
+  }
+  
+  # 分离数值型和非数值型变量
+  numeric_cols <- df %>% select(where(is.numeric)) %>% colnames()
+  non_numeric_cols <- df %>% select(!where(is.numeric)) %>% colnames()
+  
+  # 对数值型变量使用KNN插补
+  if (length(numeric_cols) > 0 && sum(is.na(df[numeric_cols])) > 0) {
+    cat("对数值型变量使用KNN插补...\n")
+    numeric_imputed <- VIM::kNN(df[numeric_cols], k = 5, scale = FALSE)
+    df[numeric_cols] <- numeric_imputed %>% select(all_of(numeric_cols))
+  }
+  
+  # 对非数值型变量使用众数填充或标记为"未知"
+  for (col in non_numeric_cols) {
+    if (any(is.na(df[[col]]))) {
+      mode_val <- names(sort(table(df[[col]]), decreasing = TRUE))[1]
+      if (!is.null(mode_val)) {
+        df[[col]][is.na(df[[col]])] <- mode_val
+        cat("变量", col, "的缺失值用众数'", mode_val, "'填充\n")
+      }
+    }
+  }
+  
+  return(df)
+}
+
+handle_duplicates <- function(df) {
+  """
+  处理重复值
+  """
+  duplicates <- sum(duplicated(df))
+  if (duplicates > 0) {
+    cat("发现", duplicates, "个完全重复的行，已删除\n")
+    df <- distinct(df)
+  } else {
+    cat("没有发现完全重复的行\n")
+  }
+  return(df)
+}
+
+convert_data_types <- function(df) {
+  """
+  智能数据类型转换
+  """
+  # 尝试识别并转换日期变量
+  date_patterns <- c("date", "Date", "time", "Time")
+  for (col in colnames(df)) {
+    if (any(grepl(paste(date_patterns, collapse = "|"), col))) {
+      if (is.character(df[[col]])) {
+        converted <- tryCatch({
+          ymd(df[[col]])
+        }, error = function(e) {
+          return(NULL)
+        })
+        if (!is.null(converted) && !all(is.na(converted))) {
+          df[[col]] <- converted
+          cat("变量", col, "已转换为日期格式\n")
+        }
+      }
+    }
+  }
+  
+  # 自动识别应该为因子的字符变量
+  char_cols <- df %>% select(where(is.character)) %>% colnames()
+  for (col in char_cols) {
+    unique_vals <- length(unique(df[[col]]))
+    if (unique_vals <= 10 && unique_vals < nrow(df) * 0.1) {
+      df[[col]] <- as.factor(df[[col]])
+      cat("变量", col, "已转换为因子（", unique_vals, "个水平）\n")
+    }
+  }
+  
+  return(df)
+}
+
+detect_outliers <- function(df) {
+  """
+  检测并报告异常值（不自动删除）
+  """
+  numeric_cols <- df %>% select(where(is.numeric)) %>% colnames()
+  
+  if (length(numeric_cols) > 0) {
+    cat("数值变量异常值检测（IQR方法）:\n")
+    for (col in numeric_cols) {
+      Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
+      Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
+      IQR_val <- Q3 - Q1
+      lower_bound <- Q1 - 1.5 * IQR_val
+      upper_bound <- Q3 + 1.5 * IQR_val
+      
+      outliers <- which(df[[col]] < lower_bound | df[[col]] > upper_bound)
+      if (length(outliers) > 0) {
+        cat(" ", col, ": ", length(outliers), "个潜在异常值（", 
+            round(length(outliers)/nrow(df)*100, 1), "%）\n")
+        # 可选的：显示异常值详情
+        if (length(outliers) <= 10) {
+          cat("    异常值索引:", paste(outliers, collapse = ", "), "\n")
+        }
+      } else {
+        cat(" ", col, ": 无异常值\n")
+      }
+    }
+  }
+}
+
+print_data_quality <- function(df) {
+  """
+  打印数据质量报告
+  """
+  cat("数据维度:", dim(df), "\n")
+  cat("总缺失值:", sum(is.na(df)), "\n")
+  cat("变量类型:\n")
+  print(sapply(df, class))
+  cat("\n基本统计信息:\n")
+  numeric_df <- df %>% select(where(is.numeric))
+  if (ncol(numeric_df) > 0) {
+    print(summary(numeric_df))
+  }
+}
+
+# 使用示例
+# cleaned_data <- scientific_data_cleaning("test_data.csv", "cleaned_data.csv")
