@@ -1,1 +1,100 @@
+import statsmodels.api as sm
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.utils.class_weight import compute_class_weight
 
+def create_logistic_regression_model(preprocessor, use_regularization=False, class_weight_dict=None):
+    """创建逻辑回归模型"""
+    if class_weight_dict is None:
+        class_weight_dict = 'balanced'
+    
+    if use_regularization:
+        model = Pipeline(steps=[
+            ('preprocessor', preprocessor),
+            ('classifier', LogisticRegression(penalty='l2', C=0.1, random_state=42, 
+                                            max_iter=1000, class_weight=class_weight_dict))
+        ])
+    else:
+        model = Pipeline(steps=[
+            ('preprocessor', preprocessor),
+            ('classifier', LogisticRegression(random_state=42, max_iter=1000, 
+                                            class_weight=class_weight_dict))
+        ])
+    
+    return model
+
+def detailed_logistic_analysis(X_train, X_test, y_train, y_test, preprocessor, selected_features):
+    """进行详细的逻辑回归分析，参考R代码的输出格式"""
+    
+    # 先拟合预处理器并转换数据
+    X_train_processed = preprocessor.fit_transform(X_train)
+    X_test_processed = preprocessor.transform(X_test)
+    
+    # 获取特征名称 - 在预处理器拟合之后
+    feature_names = []
+    for name, trans, cols in preprocessor.transformers_:
+        if name == 'num':
+            feature_names.extend(cols)
+        elif name == 'cat':
+            onehot = trans.named_steps['onehot']
+            encoded_names = onehot.get_feature_names_out(cols)
+            feature_names.extend(encoded_names)
+    
+    # 添加截距项
+    X_train_with_intercept = sm.add_constant(X_train_processed)
+    X_test_with_intercept = sm.add_constant(X_test_processed)
+    
+    # 使用statsmodels进行逻辑回归
+    logit_model = sm.Logit(y_train, X_train_with_intercept)
+    result = logit_model.fit(disp=False)
+    
+    print("逻辑回归详细结果:")
+    print(result.summary())
+    
+    # 创建详细结果表格
+    coefficients = result.params
+    std_err = result.bse
+    z_values = result.tvalues
+    p_values = result.pvalues
+    conf_int = result.conf_int()
+    
+    detailed_results = pd.DataFrame({
+        '变量': ['const'] + feature_names,
+        '系数': coefficients,
+        '标准误': std_err,
+        'z值': z_values,
+        'P值': p_values,
+        'OR值': np.exp(coefficients),
+        'OR_95_CI_下限': np.exp(conf_int[0]),
+        'OR_95_CI_上限': np.exp(conf_int[1])
+    })
+    
+    # 添加显著性标记
+    def get_significance(p):
+        if p < 0.001:
+            return '***'
+        elif p < 0.01:
+            return '**'
+        elif p < 0.05:
+            return '*'
+        elif p < 0.1:
+            return '.'
+        else:
+            return ''
+    
+    detailed_results['显著性'] = detailed_results['P值'].apply(get_significance)
+    detailed_results['OR_95_CI'] = detailed_results.apply(
+        lambda x: f"{x['OR_95_CI_下限']:.3f}-{x['OR_95_CI_上限']:.3f}", axis=1
+    )
+    
+    # 只保留需要的列
+    final_results = detailed_results[['变量', '系数', '标准误', 'z值', 'P值', '显著性', 'OR值', 'OR_95_CI']]
+    
+    print("\n逻辑回归系数和OR值:")
+    print(final_results.round(4))
+    
+    # 保存详细结果
+    final_results.to_csv('逻辑回归详细结果.csv', index=False, encoding='utf-8-sig')
+    print("\n详细结果已保存至 '逻辑回归详细结果.csv'")
+    
+    return final_results, result
