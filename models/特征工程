@@ -1,1 +1,121 @@
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
+def engineer_features(X_train, X_test, y_train):
+    """特征工程，参考R代码的处理方式"""
+    
+    # 处理数值特征
+    numeric_features = X_train.select_dtypes(include=[np.number]).columns.tolist()
+    print(f"数值特征数量: {len(numeric_features)}")
+    
+    # 移除方差为零的特征
+    selector = VarianceThreshold()
+    X_train_numeric = X_train[numeric_features].fillna(X_train[numeric_features].median())
+    X_test_numeric = X_test[numeric_features].fillna(X_train[numeric_features].median())
+    
+    selector.fit(X_train_numeric)
+    non_constant_mask = selector.get_support()
+    kept_numeric_features = [numeric_features[i] for i in range(len(numeric_features)) if non_constant_mask[i]]
+    
+    print(f"移除零方差特征后数值特征数量: {len(kept_numeric_features)}")
+    
+    # 处理分类特征
+    categorical_features = X_train.select_dtypes(include=['object', 'category']).columns.tolist()
+    print(f"分类特征数量: {len(categorical_features)}")
+    
+    X_processed_train = X_train[kept_numeric_features].copy()
+    X_processed_test = X_test[kept_numeric_features].copy()
+    
+    # 对分类特征进行独热编码，避免虚拟变量陷阱
+    for col in categorical_features:
+        unique_vals = X_train[col].dropna().unique()
+        if len(unique_vals) > 1:  # 只有多个唯一值才编码
+            # 训练集编码
+            dummies_train = pd.get_dummies(X_train[col], prefix=col, drop_first=True)
+            # 测试集编码 (对齐训练集的列)
+            dummies_test = pd.get_dummies(X_test[col], prefix=col)
+            dummies_test = dummies_test.reindex(columns=dummies_train.columns, fill_value=0)
+            
+            X_processed_train = pd.concat([X_processed_train, dummies_train], axis=1)
+            X_processed_test = pd.concat([X_processed_test, dummies_test], axis=1)
+    
+    # 移除常数列和全NA列
+    constant_columns = X_processed_train.columns[X_processed_train.nunique() == 1]
+    if len(constant_columns) > 0:
+        print(f"移除常数列: {list(constant_columns)}")
+        X_processed_train = X_processed_train.drop(columns=constant_columns)
+        X_processed_test = X_processed_test.drop(columns=constant_columns)
+    
+    na_columns = X_processed_train.columns[X_processed_train.isna().all()]
+    if len(na_columns) > 0:
+        print(f"移除全NA列: {list(na_columns)}")
+        X_processed_train = X_processed_train.drop(columns=na_columns)
+        X_processed_test = X_processed_test.drop(columns=na_columns)
+    
+    print(f"处理后的特征形状 - 训练集: {X_processed_train.shape}, 测试集: {X_processed_test.shape}")
+    
+    # 检查样本量和特征数的比例
+    n_samples, n_features = X_processed_train.shape
+    ratio = n_samples / n_features if n_features > 0 else float('inf')
+    print(f"样本量/特征数比例: {ratio:.2f}")
+    
+    if n_features >= n_samples:
+        print("警告: 特征数多于样本量，容易出现过拟合和共线性问题")
+        use_regularization = True
+    else:
+        use_regularization = False
+    
+    return X_processed_train, X_processed_test, use_regularization
+
+def select_features_random_forest(X_train, y_train, max_features=20):
+    """使用随机森林选择特征"""
+    from sklearn.ensemble import RandomForestClassifier
+    
+    rf_selector = RandomForestClassifier(n_estimators=100, random_state=42)
+    rf_selector.fit(X_train, y_train)
+    
+    feature_importance = pd.DataFrame({
+        'feature': X_train.columns,
+        'importance': rf_selector.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    # 选择重要性累计达到85%的特征
+    importances = feature_importance['importance'].values
+    cumulative_importance = np.cumsum(importances)
+    
+    n_features = np.argmax(cumulative_importance >= 0.85) + 1
+    n_features = min(n_features, max_features)
+    
+    selected_features = feature_importance.head(n_features)['feature'].tolist()
+    
+    print(f"选择的特征数量: {n_features}")
+    print(f"累计重要性: {cumulative_importance[n_features-1]:.3f}")
+    
+    return selected_features, feature_importance
+
+def build_preprocessor(numerical_features, categorical_features):
+    """构建预处理管道"""
+    
+    # 数值特征处理器
+    numerical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())
+    ])
+    
+    # 分类特征处理器
+    categorical_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='most_frequent')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first'))
+    ])
+    
+    # 组合处理器
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numerical_transformer, numerical_features),
+            ('cat', categorical_transformer, categorical_features)
+        ])
+    
+    return preprocessor
